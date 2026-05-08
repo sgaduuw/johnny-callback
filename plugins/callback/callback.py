@@ -30,10 +30,12 @@ DOCUMENTATION = """
   short_description: Ship playbook results to johnny-api
   version_added: "0.1.0"
   description:
-    - Observes playbook execution via the v2_* callback hooks, buffers
+    - >
+      Observes playbook execution via the v2_* callback hooks, buffers
       facts and events per play, and POSTs to johnny-api at the end.
-    - Best-effort: any HTTP failure is logged as a warning and the
-      play continues. johnny's idempotent ingest (event_uuid UNIQUE,
+    - >
+      Best-effort design. Any HTTP failure is logged as a warning and
+      the play continues. johnny's idempotent ingest (event_uuid UNIQUE,
       plugin-generated playbook_id) makes plugin retries safe.
   requirements:
     - johnny-api reachable from the controller running ansible

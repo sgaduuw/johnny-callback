@@ -18,6 +18,10 @@ pytest = "^8"
 pytest-cov = "^5"
 ruff = "^0.7"
 ansible-core = "^2.16"
+# Used by TestDocumentationYaml to parse the plugin's DOCUMENTATION
+# block. ansible-core pulls it transitively, but pin explicitly so
+# the test doesn't break if that ever changes.
+pyyaml = "^6"
 
 [build-system]
 requires = ["poetry-core"]
