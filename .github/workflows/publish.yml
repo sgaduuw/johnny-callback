@@ -6,6 +6,15 @@ name: Publish to Galaxy
 on:
   release:
     types: [published]
+  # Manual trigger for retroactive publishes (e.g. publishing v0.1.0
+  # after the workflow itself was added). Use:
+  #   gh workflow run publish.yml -f tag=v0.1.0
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build + publish (e.g. v0.1.0)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -13,6 +22,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.event.release.tag_name }}
 
       - uses: actions/setup-python@v5
         with:
