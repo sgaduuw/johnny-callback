@@ -14,8 +14,8 @@ package-mode = false
 python = "^3.10"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8"
-pytest-cov = "^5"
+pytest = ">=8,<10"
+pytest-cov = ">=5,<8"
 ruff = "^0.7"
 ansible-core = "^2.16"
 # Used by TestDocumentationYaml to parse the plugin's DOCUMENTATION
