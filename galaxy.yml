@@ -1,0 +1,23 @@
+namespace: sgaduuw
+name: johnny
+version: 0.1.0
+readme: README.md
+authors:
+  - sgaduuw
+description: >
+  Ansible callback plugin that POSTs playbook results (facts, events,
+  stats) to a johnny-api instance for fleet-state reporting.
+license_file: LICENSE
+tags:
+  - callback
+  - notification
+  - monitoring
+  - reporting
+repository: https://github.com/sgaduuw/johnny-callback
+issues: https://github.com/sgaduuw/johnny-callback/issues
+build_ignore:
+  - .github
+  - tests
+  - pyproject.toml
+  - poetry.lock
+  - "*.tar.gz"

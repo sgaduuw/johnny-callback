@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Per-project Claude docs (rsync'd between workspaces, not committed)
+CLAUDE.md
+CONTEXT.md
+MEMORY.md
+
+# Built collection tarball (created by `ansible-galaxy collection build`)
+*.tar.gz
