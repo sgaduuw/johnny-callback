@@ -31,16 +31,18 @@ Zero runtime dependencies — stdlib `urllib` only.
 
 ## Install
 
-```sh
-ansible-galaxy collection install \
-    git+https://github.com/sgaduuw/johnny-callback.git
-```
-
-Or pin a tag:
+Pin a tagged release (recommended):
 
 ```sh
 ansible-galaxy collection install \
     git+https://github.com/sgaduuw/johnny-callback.git,v0.1.0
+```
+
+For the bleeding edge (`main`), drop the tag:
+
+```sh
+ansible-galaxy collection install \
+    git+https://github.com/sgaduuw/johnny-callback.git
 ```
 
 ## Configure
