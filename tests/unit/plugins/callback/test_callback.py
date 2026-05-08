@@ -390,3 +390,131 @@ class TestPlaybookLifecyclePayloads:
             "skipped": 2, "rescued": 0, "ignored": 0,
         }
         assert captured_posts[0]["url"].endswith(f"/api/v1/playbooks/{m.playbook_id}/finish")
+
+
+# ---------------------------------------------------------- v2_* hooks
+
+
+class TestV2Hooks:
+    """Verify the ansible v2_* callback hooks dispatch correctly."""
+
+    def test_playbook_on_start_initialises_state(self) -> None:
+        m = _make_module()
+        playbook = MagicMock(_file_name="/path/to/deploy.yml")
+        m.v2_playbook_on_start(playbook)
+        assert m.playbook_id is not None
+        assert m.playbook_id.version == 7
+        assert m.playbook_started_at is not None
+        assert m.playbook_name == "deploy.yml"
+
+    def test_runner_on_ok_records_event(self) -> None:
+        m = _make_module()
+        m.v2_runner_on_ok(_fake_result(rdata={"changed": False}))
+        assert len(m._events) == 1
+        assert m._events[0]["status"] == "ok"
+
+    def test_runner_on_ok_with_setup_task_also_records_facts(self) -> None:
+        m = _make_module()
+        result = _fake_result(
+            host=_fake_host("h.example.com", ["webservers"]),
+            task=_fake_task(action="setup"),
+            rdata={"ansible_facts": {"ansible_uptime_seconds": 1}},
+        )
+        m.v2_runner_on_ok(result)
+        assert len(m._events) == 1
+        assert len(m._facts) == 1
+
+    def test_runner_on_failed_records_failed_event(self) -> None:
+        m = _make_module()
+        m.v2_runner_on_failed(_fake_result())
+        assert m._events[0]["status"] == "failed"
+
+    def test_runner_on_unreachable_records_unreachable_event(self) -> None:
+        m = _make_module()
+        m.v2_runner_on_unreachable(_fake_result())
+        assert m._events[0]["status"] == "unreachable"
+
+    def test_runner_on_skipped_records_skipped_event(self) -> None:
+        m = _make_module()
+        m.v2_runner_on_skipped(_fake_result())
+        assert m._events[0]["status"] == "skipped"
+
+    def test_playbook_on_stats_flushes_in_order(self, captured_posts) -> None:
+        # facts -> events -> finish ordering matters: johnny's
+        # ingest_facts auto-creates host rows, but ordering keeps
+        # foreign-key joins predictable in the read tier.
+        m = _make_module()
+        m.playbook_id = uuid7()
+        m._facts = [{
+            "fqdn": "h.example.com",
+            "inventory_hostname": "h",
+            "groups": [],
+            "ansible_facts": {"ansible_uptime_seconds": 1},
+        }]
+        m._events = [{
+            "event_uuid": str(uuid7()),
+            "fqdn": "h.example.com",
+            "task_name": "t",
+            "task_action": "apt",
+            "status": "ok",
+            "started_at": _iso_utc(datetime.now(timezone.utc)),
+            "duration_ms": 1,
+            "stdout": "",
+            "stdout_truncated": False,
+            "diff": None,
+        }]
+        stats = MagicMock()
+        stats.processed = {"h.example.com": 1}
+        stats.summarize.return_value = {
+            "ok": 1, "changed": 0, "failures": 0, "unreachable": 0,
+            "skipped": 0, "rescued": 0, "ignored": 0,
+        }
+        m.v2_playbook_on_stats(stats)
+        urls = [p["url"] for p in captured_posts]
+        assert urls[0].endswith("/facts")
+        assert urls[1].endswith("/events")
+        assert urls[2].endswith("/finish")
+
+    def test_playbook_on_stats_skips_empty_buffers(self, captured_posts) -> None:
+        # No facts and no events recorded — only /finish should fire.
+        m = _make_module()
+        m.playbook_id = uuid7()
+        stats = MagicMock()
+        stats.processed = {}
+        m.v2_playbook_on_stats(stats)
+        assert len(captured_posts) == 1
+        assert captured_posts[0]["url"].endswith("/finish")
+
+    def test_playbook_on_play_start_captures_inventory_sources(
+        self, captured_posts
+    ) -> None:
+        m = _make_module()
+        m.playbook_id = uuid7()
+        m.playbook_started_at = datetime.now(timezone.utc)
+        play = MagicMock()
+        vm = MagicMock()
+        vm._inventory._sources = ["inventory.yml", "extra.yml"]
+        play.get_variable_manager.return_value = vm
+        m.v2_playbook_on_play_start(play)
+        assert m.inventory_sources == ["inventory.yml", "extra.yml"]
+        # And it triggers the start POST (idempotent on subsequent calls).
+        assert any(p["url"].endswith("/api/v1/playbooks") for p in captured_posts)
+        m.v2_playbook_on_play_start(play)  # second play; should NOT re-POST
+        starts = [p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")]
+        assert len(starts) == 1
+
+
+class TestIsSetupTask:
+    def test_recognises_short_form(self) -> None:
+        assert CallbackModule._is_setup_task(_fake_task(action="setup"))
+
+    def test_recognises_fqcn(self) -> None:
+        assert CallbackModule._is_setup_task(
+            _fake_task(action="ansible.builtin.setup")
+        )
+
+    def test_recognises_gather_facts(self) -> None:
+        assert CallbackModule._is_setup_task(_fake_task(action="gather_facts"))
+
+    def test_rejects_other_actions(self) -> None:
+        assert not CallbackModule._is_setup_task(_fake_task(action="apt"))
