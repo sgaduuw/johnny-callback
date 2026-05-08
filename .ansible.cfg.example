@@ -1,0 +1,15 @@
+# Example ansible.cfg snippet for enabling sgaduuw.johnny.callback.
+# Copy the relevant parts into your actual ansible.cfg.
+
+[defaults]
+# Callback plugins are opt-in. Add 'sgaduuw.johnny.callback' to the
+# comma-separated list (it can co-exist with other notification plugins).
+callbacks_enabled = sgaduuw.johnny.callback
+
+[callback_johnny]
+# Non-secret config goes here. The bearer token should come from a
+# secrets manager via the JOHNNY_API_TOKEN env var instead — env wins
+# on conflict.
+api_url = https://johnny-api.internal:8001
+timeout_seconds = 30
+# api_token = leave-this-out-and-set-JOHNNY_API_TOKEN-instead

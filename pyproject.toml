@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "johnny-callback"
+version = "0.1.0"
+description = "Ansible callback plugin sending playbook results to johnny-api"
+authors = ["Eelco Wesemann <claude-ai@init1.nl>"]
+license = "MIT"
+readme = "README.md"
+# The shipped artifact is the ansible collection (built via
+# `ansible-galaxy collection build`), not a python package. Poetry
+# is here only to manage dev tooling.
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8"
+pytest-cov = "^5"
+ruff = "^0.7"
+ansible-core = "^2.16"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
