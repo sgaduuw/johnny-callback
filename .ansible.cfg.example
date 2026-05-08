@@ -7,9 +7,18 @@
 callbacks_enabled = sgaduuw.johnny.callback
 
 [callback_johnny]
-# Non-secret config goes here. The bearer token should come from a
-# secrets manager via the JOHNNY_API_TOKEN env var instead — env wins
-# on conflict.
+# api_url: base URL only. Do NOT include /api/. The plugin appends
+# /api/v1/... itself. Trailing slash is stripped, but a path prefix
+# (e.g. https://johnny.example.com/api/) will produce broken URLs.
 api_url = https://johnny-api.internal:8001
 timeout_seconds = 30
-# api_token = leave-this-out-and-set-JOHNNY_API_TOKEN-instead
+
+# api_token: REQUIRED. Pick one of the two sources below.
+#
+# Preferred: export JOHNNY_API_TOKEN in the controller's environment
+# (env wins on conflict). Keeps the secret out of ansible.cfg.
+#
+#   export JOHNNY_API_TOKEN=...
+#
+# Fallback: set it here (commit to a secrets vault, not git).
+# api_token = put-the-bearer-token-here
