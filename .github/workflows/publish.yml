@@ -1,0 +1,37 @@
+name: Publish to Galaxy
+
+# Triggers on a published GitHub release. galaxy.yml's `version`
+# must match the release tag (without the leading 'v') for galaxy
+# to accept the upload.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ansible-core
+        run: pip install --no-cache-dir "ansible-core>=2.16"
+
+      - name: Build collection
+        run: ansible-galaxy collection build --output-path ./build
+
+      - name: Publish to galaxy.ansible.com
+        env:
+          GALAXY_TOKEN: ${{ secrets.ANSIBLE_GALAXY_TOKEN }}
+        run: |
+          if [ -z "$GALAXY_TOKEN" ]; then
+            echo "ANSIBLE_GALAXY_TOKEN secret not configured" >&2
+            exit 1
+          fi
+          ansible-galaxy collection publish \
+              ./build/sgaduuw-johnny-*.tar.gz \
+              --token "$GALAXY_TOKEN"
