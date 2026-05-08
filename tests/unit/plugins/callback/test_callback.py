@@ -31,6 +31,28 @@ from plugins.callback.callback import (
 # ---------------------------------------------------------- helpers
 
 
+class TestDocumentationYaml:
+    """Ansible parses DOCUMENTATION as YAML at plugin-load time.
+
+    A leading 'word: rest' inside a list item is a mapping key trap;
+    folded scalars (``- >``) avoid it. ansible-doc / ansible -m setup
+    are the only callers that exercise this path, so guard it here.
+    """
+
+    def test_documentation_is_valid_yaml(self) -> None:
+        import yaml
+
+        from plugins.callback import callback as mod
+
+        doc = yaml.safe_load(mod.DOCUMENTATION)
+        assert isinstance(doc, dict)
+        assert doc["name"] == "callback"
+        assert doc["type"] == "notification"
+        assert isinstance(doc["description"], list)
+        assert all(isinstance(line, str) for line in doc["description"])
+        assert {"api_url", "api_token", "timeout_seconds"} <= set(doc["options"])
+
+
 class TestUuid7:
     def test_returns_uuid_with_version_7(self) -> None:
         u = uuid7()
