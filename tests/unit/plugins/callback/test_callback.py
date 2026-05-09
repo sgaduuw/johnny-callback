@@ -72,16 +72,51 @@ class TestUuid7:
 
 
 class TestResolveFqdn:
-    def test_prefers_ansible_fqdn(self) -> None:
+    def test_prefers_ansible_fqdn_when_dotted(self) -> None:
         f = {"ansible_fqdn": "host.example.com", "ansible_nodename": "host"}
         assert _resolve_fqdn(f, "inv-name") == "host.example.com"
 
-    def test_falls_back_to_nodename(self) -> None:
+    def test_skips_bare_ansible_fqdn(self) -> None:
+        # On a freshly-installed box, ansible_fqdn can be "localhost"
+        # or just the short hostname. Don't accept those — they merge
+        # unrelated hosts together.
+        f = {
+            "ansible_fqdn": "localhost",
+            "ansible_hostname": "web1",
+            "ansible_domain": "example.com",
+        }
+        assert _resolve_fqdn(f, "inv-name") == "web1.example.com"
+
+    def test_combines_hostname_and_domain(self) -> None:
+        f = {"ansible_hostname": "web1", "ansible_domain": "example.com"}
+        assert _resolve_fqdn(f, "inv-name") == "web1.example.com"
+
+    def test_skips_hostname_when_domain_empty(self) -> None:
+        f = {"ansible_hostname": "web1", "ansible_domain": ""}
+        assert _resolve_fqdn(f, "inv-name") == "inv-name"
+
+    def test_accepts_dotted_nodename(self) -> None:
+        f = {"ansible_nodename": "host.example.com"}
+        assert _resolve_fqdn(f, "inv-name") == "host.example.com"
+
+    def test_skips_undotted_nodename(self) -> None:
+        # Bare nodename diverges from FQDN-form on the same physical
+        # host; fall through to inventory_hostname instead.
         f = {"ansible_nodename": "host"}
-        assert _resolve_fqdn(f, "inv-name") == "host"
+        assert _resolve_fqdn(f, "inv-name") == "inv-name"
 
     def test_falls_back_to_inventory_hostname(self) -> None:
         assert _resolve_fqdn({}, "inv-name") == "inv-name"
+
+    def test_ladder_priority_fqdn_over_hostname_domain(self) -> None:
+        # If both rungs would produce a value, the dotted ansible_fqdn
+        # wins (it's the canonical resolved form).
+        f = {
+            "ansible_fqdn": "web1.example.com",
+            "ansible_hostname": "web1",
+            "ansible_domain": "different.example.com",
+        }
+        assert _resolve_fqdn(f, "inv-name") == "web1.example.com"
 
 
 class TestTruncate:
