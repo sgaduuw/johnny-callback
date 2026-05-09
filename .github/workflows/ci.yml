@@ -12,18 +12,19 @@ jobs:
     timeout-minutes: 10
     strategy:
       # ansible-core 2.19 (our test target) requires controller
-      # Python 3.11+, so the matrix floor moved up from 3.10 to
-      # 3.12 (Debian 12 / Ubuntu 24.04 default). Ceiling 3.14 is
-      # the latest stable. The plugin's source code stays
+      # Python 3.11+, so the matrix floor is 3.11 (Debian 12
+      # default). Cover every minor through the 3.14 ceiling so
+      # any single-version drift surfaces in CI rather than in
+      # the field. The plugin's source code stays
       # Python-3.10-compatible so a Ubuntu 22.04 + ansible-core
       # 2.16/2.17 controller can still install and run the
-      # shipped collection — those users just aren't covered by
-      # CI any more. fail-fast: false so a single-version
+      # shipped collection — those users just aren't in the
+      # matrix any more. fail-fast: false so a single-version
       # regression doesn't mask its diagnosis behind a sibling
       # job's abort.
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
 
