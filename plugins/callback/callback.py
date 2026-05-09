@@ -164,15 +164,19 @@ class CallbackModule(CallbackBase):
     # -------- ansible callback hooks --------
 
     def v2_playbook_on_start(self, playbook) -> None:
-        self.playbook_id = uuid7()
-        self.playbook_started_at = datetime.now(timezone.utc)
+        # Fires only for ansible-playbook runs, not ad-hoc `ansible -m`.
+        # Records the richer playbook context (filename); ad-hoc takes
+        # the lazy-init path in v2_playbook_on_play_start instead.
+        self._ensure_playbook_state()
         try:
             self.playbook_name = os.path.basename(playbook._file_name)
         except AttributeError:
             self.playbook_name = "<unknown>"
-        self.user = os.environ.get("USER", "ansible")
 
     def v2_playbook_on_play_start(self, play) -> None:
+        # Lazy-init handles ad-hoc, where v2_playbook_on_start never
+        # fires and self.playbook_id would otherwise stay None.
+        self._ensure_playbook_state(play=play)
         # Inventory sources are play-scoped via the variable_manager.
         # First play in the playbook is enough; later plays reuse.
         if not self.inventory_sources:
@@ -184,7 +188,94 @@ class CallbackModule(CallbackBase):
                     self.inventory_sources = [str(s) for s in sources]
             except Exception:  # noqa: BLE001 - defensive; never raise
                 pass
-            self._post_start()
+        self._snapshot_play_facts(play)
+        self._post_start()
+
+    def _ensure_playbook_state(self, play=None) -> None:
+        """Initialise playbook-level state if not yet done.
+
+        Called from both v2_playbook_on_start (rich path) and
+        v2_playbook_on_play_start (lazy path, used by ad-hoc). Safe
+        to call repeatedly; only the first call assigns playbook_id.
+        """
+        if self.playbook_id is not None:
+            return
+        self.playbook_id = uuid7()
+        self.playbook_started_at = datetime.now(timezone.utc)
+        self.user = os.environ.get("USER", "ansible")
+        # Best-effort: derive a useful name when there's no playbook
+        # object (ad-hoc). Falls back to "<ad-hoc>" if the play
+        # doesn't expose a recognisable first-task action.
+        self.playbook_name = self._derive_adhoc_name(play)
+
+    @staticmethod
+    def _derive_adhoc_name(play) -> str:
+        if play is None:
+            return "<ad-hoc>"
+        try:
+            blocks = play.get_tasks() or []
+            for block in blocks:
+                tasks = block if isinstance(block, list) else [block]
+                for task in tasks:
+                    action = (
+                        getattr(task, "action", None)
+                        or getattr(task, "_action", None)
+                    )
+                    if action:
+                        return f"<ad-hoc:{action}>"
+        except Exception:  # noqa: BLE001 - defensive; never raise
+            pass
+        return "<ad-hoc>"
+
+    def _snapshot_play_facts(self, play) -> None:
+        """Capture facts already known at play start.
+
+        With gathering=smart and a primed cache, the setup module
+        never runs as a task, so v2_runner_on_ok never sees it and
+        _record_facts is never called for the implicit gather. Read
+        host_vars["ansible_facts"] from the variable_manager instead;
+        it already contains whatever cached facts were loaded.
+
+        Idempotent per host within one play: appended snapshots are
+        deduplicated against an existing entry for the same fqdn so
+        a later setup-task result can still overwrite via _record_facts
+        without producing two snapshots from this single hook.
+        """
+        try:
+            vm = play.get_variable_manager()
+        except Exception:  # noqa: BLE001
+            return
+        inv = getattr(vm, "_inventory", None)
+        if inv is None:
+            return
+        try:
+            pattern = play.hosts or "all"
+            hosts = inv.get_hosts(pattern=pattern)
+        except Exception:  # noqa: BLE001
+            return
+        seen_fqdns = {entry["fqdn"] for entry in self._facts}
+        for host in hosts:
+            try:
+                host_vars = vm.get_vars(play=play, host=host)
+            except Exception:  # noqa: BLE001
+                continue
+            ansible_facts = host_vars.get("ansible_facts") or {}
+            if not ansible_facts:
+                continue
+            fqdn = _resolve_fqdn(ansible_facts, host.get_name())
+            if fqdn in seen_fqdns:
+                continue
+            try:
+                groups = [g.get_name() for g in host.get_groups()]
+            except Exception:  # noqa: BLE001
+                groups = []
+            self._facts.append({
+                "fqdn": fqdn,
+                "inventory_hostname": host.get_name(),
+                "groups": groups,
+                "ansible_facts": dict(ansible_facts),
+            })
+            seen_fqdns.add(fqdn)
 
     def v2_runner_on_ok(self, result) -> None:
         self._record_event(result, base_status="ok")
