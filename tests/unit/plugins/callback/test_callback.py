@@ -298,6 +298,7 @@ class TestRecordEvent:
         assert e["stdout"] == ""
         assert e["stdout_truncated"] is False
         assert e["diff"] is None
+        assert e["diff_truncated"] is False
         UUID(e["event_uuid"])  # parses
 
     def test_changed_status_when_ok_and_changed(self) -> None:
@@ -326,7 +327,22 @@ class TestRecordEvent:
             _fake_result(rdata={"diff": long_diff, "changed": True}),
             base_status="ok",
         )
-        assert len(m._events[0]["diff"]) == DIFF_MAX
+        e = m._events[0]
+        assert len(e["diff"]) == DIFF_MAX
+        # Mirrors stdout_truncated. Without this consumers can't
+        # tell whether the stored diff is the full picture or a
+        # silent cut at DIFF_MAX. See johnny-callback#7.
+        assert e["diff_truncated"] is True
+
+    def test_under_cap_diff_not_truncated(self) -> None:
+        m = _make_module()
+        m._record_event(
+            _fake_result(rdata={"diff": "small change", "changed": True}),
+            base_status="ok",
+        )
+        e = m._events[0]
+        assert e["diff"] == "small change"
+        assert e["diff_truncated"] is False
 
     def test_serialises_dict_diff_as_json(self) -> None:
         m = _make_module()
@@ -334,9 +350,10 @@ class TestRecordEvent:
             _fake_result(rdata={"diff": {"before": "a", "after": "b"}, "changed": True}),
             base_status="ok",
         )
-        diff = m._events[0]["diff"]
-        assert diff is not None
-        assert json.loads(diff) == {"before": "a", "after": "b"}
+        e = m._events[0]
+        assert e["diff"] is not None
+        assert json.loads(e["diff"]) == {"before": "a", "after": "b"}
+        assert e["diff_truncated"] is False  # small dict, well under cap
 
 
 # ---------------------------------------------------------- HTTP boundary

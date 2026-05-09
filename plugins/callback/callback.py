@@ -364,11 +364,12 @@ class CallbackModule(CallbackBase):
 
         diff_raw = rdata.get("diff")
         diff_str: str | None = None
+        diff_was_truncated = False
         if diff_raw:
             diff_str = (
                 diff_raw if isinstance(diff_raw, str) else json.dumps(diff_raw)
             )
-            diff_str, _ = _truncate(diff_str, DIFF_MAX)
+            diff_str, diff_was_truncated = _truncate(diff_str, DIFF_MAX)
 
         fqdn = _resolve_fqdn(rdata.get("ansible_facts", {}) or {}, host.get_name())
 
@@ -383,6 +384,10 @@ class CallbackModule(CallbackBase):
             "stdout": stdout_t,
             "stdout_truncated": stdout_was_truncated,
             "diff": diff_str,
+            # Mirrors stdout_truncated. Requires johnny v0.3.0+ on
+            # the receiving end (older servers reject unknown keys
+            # under extra="forbid"). See johnny-callback#7.
+            "diff_truncated": diff_was_truncated,
         })
 
     def _record_facts(self, result) -> None:
