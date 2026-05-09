@@ -526,6 +526,170 @@ class TestV2Hooks:
         assert len(starts) == 1
 
 
+class TestEnsurePlaybookState:
+    """Lazy idempotent playbook-state init (issue #5).
+
+    v2_playbook_on_start does not fire for ad-hoc commands
+    (`ansible -m setup`); v2_playbook_on_play_start must initialise
+    state so the POST chain has a valid UUIDv7 playbook_id.
+    """
+
+    def test_first_call_assigns_uuid7_and_started_at(self) -> None:
+        m = _make_module()
+        m._ensure_playbook_state()
+        assert m.playbook_id is not None
+        assert m.playbook_id.version == 7
+        assert m.playbook_started_at is not None
+        assert m.playbook_started_at.tzinfo is timezone.utc
+
+    def test_second_call_is_noop(self) -> None:
+        m = _make_module()
+        m._ensure_playbook_state()
+        first_id = m.playbook_id
+        first_started_at = m.playbook_started_at
+        m._ensure_playbook_state()
+        assert m.playbook_id is first_id
+        assert m.playbook_started_at is first_started_at
+
+    def test_no_play_sets_generic_adhoc_name(self) -> None:
+        m = _make_module()
+        m._ensure_playbook_state()
+        assert m.playbook_name == "<ad-hoc>"
+
+    def test_play_with_first_task_sets_adhoc_action_name(self) -> None:
+        m = _make_module()
+        play = MagicMock()
+        play.get_tasks.return_value = [[_fake_task(action="setup")]]
+        m._ensure_playbook_state(play=play)
+        assert m.playbook_name == "<ad-hoc:setup>"
+
+    def test_play_with_flat_task_list_handled(self) -> None:
+        # play.get_tasks() can return a list of tasks rather than
+        # list-of-blocks depending on ansible internals.
+        m = _make_module()
+        play = MagicMock()
+        play.get_tasks.return_value = [_fake_task(action="ping")]
+        m._ensure_playbook_state(play=play)
+        assert m.playbook_name == "<ad-hoc:ping>"
+
+    def test_play_without_tasks_falls_back_to_adhoc(self) -> None:
+        m = _make_module()
+        play = MagicMock()
+        play.get_tasks.return_value = []
+        m._ensure_playbook_state(play=play)
+        assert m.playbook_name == "<ad-hoc>"
+
+    def test_playbook_on_start_still_uses_filename(self) -> None:
+        # Regression: the rich path (ansible-playbook) keeps recording
+        # the playbook filename even though init now goes through
+        # _ensure_playbook_state.
+        m = _make_module()
+        playbook = MagicMock(_file_name="/path/to/deploy.yml")
+        m.v2_playbook_on_start(playbook)
+        assert m.playbook_name == "deploy.yml"
+
+    def test_playbook_on_play_start_without_prior_start_posts_valid_uuid(
+        self, captured_posts
+    ) -> None:
+        # Simulate ad-hoc: skip v2_playbook_on_start entirely.
+        m = _make_module()
+        play = MagicMock()
+        play.hosts = "all"
+        play.get_tasks.return_value = [[_fake_task(action="setup")]]
+        vm = MagicMock()
+        vm._inventory.get_hosts.return_value = []
+        vm._inventory._sources = ["inventory.yml"]
+        play.get_variable_manager.return_value = vm
+        m.v2_playbook_on_play_start(play)
+        starts = [p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")]
+        assert len(starts) == 1
+        body = starts[0]["body"]
+        UUID(body["id"])  # must parse
+        assert body["name"] == "<ad-hoc:setup>"
+        assert body["inventory_sources"] == ["inventory.yml"]
+
+
+class TestSnapshotPlayFacts:
+    """Capture cached facts at play start (issue #4).
+
+    With gathering=smart, the setup module may never run as a task,
+    so the only place to find the host's facts is in the variable
+    manager's host vars (where smart-gathering loaded them).
+    """
+
+    def _make_play_with_hosts(self, host_vars_by_host: dict[str, dict]) -> MagicMock:
+        play = MagicMock()
+        play.hosts = "all"
+        play.get_tasks.return_value = []
+        vm = MagicMock()
+        hosts = []
+        for name, vars_dict in host_vars_by_host.items():
+            host = _fake_host(name)
+            hosts.append(host)
+            # vm.get_vars dispatch: assign per-host return via side_effect.
+            host._test_vars = vars_dict
+        vm._inventory.get_hosts.return_value = hosts
+        vm._inventory._sources = []
+        vm.get_vars.side_effect = lambda play, host: host._test_vars
+        play.get_variable_manager.return_value = vm
+        return play
+
+    def test_captures_cached_facts_from_host_vars(self) -> None:
+        m = _make_module()
+        m.playbook_id = uuid7()  # skip lazy init for focus
+        play = self._make_play_with_hosts({
+            "web1": {"ansible_facts": {
+                "ansible_fqdn": "web1.example.com",
+                "ansible_default_ipv4": {"address": "10.0.0.1"},
+                "ansible_uptime_seconds": 3600,
+            }},
+        })
+        m._snapshot_play_facts(play)
+        assert len(m._facts) == 1
+        rec = m._facts[0]
+        assert rec["fqdn"] == "web1.example.com"
+        assert rec["inventory_hostname"] == "web1"
+        assert rec["ansible_facts"]["ansible_uptime_seconds"] == 3600
+
+    def test_skips_hosts_with_no_cached_facts(self) -> None:
+        m = _make_module()
+        m.playbook_id = uuid7()
+        play = self._make_play_with_hosts({
+            "web1": {"ansible_facts": {"ansible_fqdn": "web1.x"}},
+            "web2": {},  # cache miss
+        })
+        m._snapshot_play_facts(play)
+        assert len(m._facts) == 1
+        assert m._facts[0]["inventory_hostname"] == "web1"
+
+    def test_dedupes_against_existing_entries(self) -> None:
+        # If a setup-task result already produced a snapshot for the
+        # host (rare but possible if hooks order surprises us), don't
+        # duplicate from the play-start snapshot.
+        m = _make_module()
+        m.playbook_id = uuid7()
+        m._facts.append({
+            "fqdn": "web1.example.com",
+            "inventory_hostname": "web1",
+            "groups": [],
+            "ansible_facts": {"existing": True},
+        })
+        play = self._make_play_with_hosts({
+            "web1": {"ansible_facts": {"ansible_fqdn": "web1.example.com"}},
+        })
+        m._snapshot_play_facts(play)
+        assert len(m._facts) == 1
+        assert m._facts[0]["ansible_facts"] == {"existing": True}
+
+    def test_swallows_variable_manager_errors(self) -> None:
+        m = _make_module()
+        m.playbook_id = uuid7()
+        play = MagicMock()
+        play.get_variable_manager.side_effect = RuntimeError("boom")
+        m._snapshot_play_facts(play)  # must not raise
+        assert m._facts == []
+
+
 class TestIsSetupTask:
     def test_recognises_short_form(self) -> None:
         assert CallbackModule._is_setup_task(_fake_task(action="setup"))
