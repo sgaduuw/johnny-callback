@@ -97,12 +97,29 @@ except ImportError:  # pragma: no cover
 
 
 def _resolve_fqdn(facts: dict, inventory_hostname: str) -> str:
-    """Fallback chain: ansible_fqdn -> ansible_nodename -> inventory_hostname."""
-    return (
-        facts.get("ansible_fqdn")
-        or facts.get("ansible_nodename")
-        or inventory_hostname
-    )
+    """Resolve to the most-qualified hostname the facts can produce.
+
+    Convergence ladder. The same physical host should land at the
+    same key whether facts arrived via fresh setup (full ansible_fqdn
+    populated), a smart-cache snapshot (may carry only ansible_hostname
+    + ansible_domain), or a sparse subset gather:
+
+    1. ansible_fqdn if it contains a dot (skips bare "localhost").
+    2. ansible_hostname + "." + ansible_domain if both are non-empty.
+    3. ansible_nodename if it contains a dot.
+    4. inventory_hostname (may itself be unqualified; user discipline).
+    """
+    fqdn = facts.get("ansible_fqdn")
+    if fqdn and "." in fqdn:
+        return fqdn
+    hostname = facts.get("ansible_hostname")
+    domain = facts.get("ansible_domain")
+    if hostname and domain:
+        return f"{hostname}.{domain}"
+    nodename = facts.get("ansible_nodename")
+    if nodename and "." in nodename:
+        return nodename
+    return inventory_hostname
 
 
 def _truncate(s: str | None, cap: int) -> tuple[str, bool]:
