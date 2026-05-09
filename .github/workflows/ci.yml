@@ -11,16 +11,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
-      # Floor (3.10) is what the plugin's pyproject.toml constraint
-      # supports and matches the lowest ansible-core 2.16 install
-      # base. Ceiling (3.14) is the latest stable. 3.12 in the
-      # middle covers the version most distros' ansible packages
-      # currently bundle. fail-fast: false so a single-version
-      # regression doesn't mask its own diagnosis behind a sibling
+      # ansible-core 2.19 (our test target) requires controller
+      # Python 3.11+, so the matrix floor moved up from 3.10 to
+      # 3.12 (Debian 12 / Ubuntu 24.04 default). Ceiling 3.14 is
+      # the latest stable. The plugin's source code stays
+      # Python-3.10-compatible so a Ubuntu 22.04 + ansible-core
+      # 2.16/2.17 controller can still install and run the
+      # shipped collection — those users just aren't covered by
+      # CI any more. fail-fast: false so a single-version
+      # regression doesn't mask its diagnosis behind a sibling
       # job's abort.
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.14"]
+        python-version: ["3.12", "3.14"]
     steps:
       - uses: actions/checkout@v5
 

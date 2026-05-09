@@ -11,13 +11,24 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.10"
+# Source code stays Python-3.10-compatible (no 3.11+ syntax,
+# `from __future__ import annotations` everywhere) so the
+# installed collection runs on a Ubuntu-22.04 controller with
+# ansible-core 2.16/2.17. Dev tooling pins ^3.11 because that's
+# what ansible-core 2.19 (our test target) requires; the python
+# constraint here only affects `poetry install`, not the
+# shipped collection artifact.
+python = "^3.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9"
 pytest-cov = "^7"
 ruff = "^0.15"
-ansible-core = "^2.16"
+# Bumping past 2.18 raises the controller Python floor to 3.11
+# (was 3.10 on 2.16/2.17). Ubuntu 22.04 + ansible-core 2.16/2.17
+# users are still source-compat at runtime — they just stop being
+# covered by our CI matrix.
+ansible-core = "^2.19"
 # Used by TestDocumentationYaml to parse the plugin's DOCUMENTATION
 # block. ansible-core pulls it transitively, but pin explicitly so
 # the test doesn't break if that ever changes.
