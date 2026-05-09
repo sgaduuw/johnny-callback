@@ -9,9 +9,12 @@ contracts/v1.py contract).
 from __future__ import annotations
 
 import json
+import socket
+import ssl
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 from uuid import UUID
 
 import pytest
@@ -385,22 +388,38 @@ class TestHttpBoundary:
         assert captured_posts == []
         m._display.warning.assert_called_once()
 
-    def test_post_swallows_http_error(self, captured_posts) -> None:
-        # Replace the patched urlopen with one that raises.
+    # The realistic failure modes a real urlopen() raises in
+    # production. The plugin's contract is "never raise from a
+    # hook"; this list pins the contract against each one so a
+    # refactor that narrows the except clause (e.g. drops the bare
+    # `except Exception`) is caught by a red test rather than by a
+    # paged operator.
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            URLError("connection refused"),
+            HTTPError("http://x/", 500, "Server Error", {}, None),  # type: ignore[arg-type]
+            socket.timeout("timed out"),
+            ssl.SSLError("handshake failed"),
+            ConnectionResetError("peer reset"),
+            OSError("ENOMEM"),
+            RuntimeError("boom"),
+        ],
+        ids=[
+            "urllib.error.URLError",
+            "urllib.error.HTTPError",
+            "socket.timeout",
+            "ssl.SSLError",
+            "ConnectionResetError",
+            "OSError",
+            "RuntimeError",
+        ],
+    )
+    def test_post_swallows_every_realistic_failure(self, exc) -> None:
         m = _make_module()
-        from urllib.error import URLError
         with patch(
             "plugins.callback.callback._urlrequest.urlopen",
-            side_effect=URLError("connection refused"),
-        ):
-            m._post("/api/v1/playbooks", {})
-        m._display.warning.assert_called_once()
-
-    def test_post_swallows_arbitrary_exception(self) -> None:
-        m = _make_module()
-        with patch(
-            "plugins.callback.callback._urlrequest.urlopen",
-            side_effect=RuntimeError("boom"),
+            side_effect=exc,
         ):
             m._post("/api/v1/playbooks", {})  # must not raise
         m._display.warning.assert_called_once()
