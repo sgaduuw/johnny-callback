@@ -96,6 +96,22 @@ except ImportError:  # pragma: no cover
         return uuid.UUID(bytes=bytes(b))
 
 
+def _ensure_ansible_prefix(facts: dict) -> dict:
+    """Re-add the ansible_ prefix to fact keys that lost it.
+
+    Ansible strips the ansible_ prefix when merging gathered facts
+    into host_vars["ansible_facts"], regardless of inject_facts_as_vars.
+    Module return-values (the dict that arrives in v2_runner_on_ok)
+    keep the prefix. The wire contract and johnny's projection
+    columns expect the prefixed form, so when reading from the
+    variable_manager we re-add it.
+    """
+    out: dict = {}
+    for k, v in facts.items():
+        out[k if k.startswith("ansible_") else f"ansible_{k}"] = v
+    return out
+
+
 def _resolve_fqdn(facts: dict, inventory_hostname: str) -> str:
     """Resolve to the most-qualified hostname the facts can produce.
 
@@ -276,9 +292,20 @@ class CallbackModule(CallbackBase):
                 host_vars = vm.get_vars(play=play, host=host)
             except Exception:  # noqa: BLE001
                 continue
-            ansible_facts = host_vars.get("ansible_facts") or {}
-            if not ansible_facts:
+            raw_facts = host_vars.get("ansible_facts") or {}
+            if not raw_facts:
                 continue
+            # Ansible's variable_manager strips the "ansible_" prefix
+            # off keys when storing facts under host_vars["ansible_facts"]
+            # (e.g. fqdn, hostname, default_ipv4), regardless of the
+            # inject_facts_as_vars setting. Module results in
+            # _record_facts arrive WITH the prefix. Normalise to the
+            # prefixed form so:
+            # 1. _resolve_fqdn (which looks for ansible_fqdn /
+            #    ansible_hostname / ansible_domain) finds them.
+            # 2. johnny's projection columns (json_path lookups for
+            #    ansible_default_ipv4.address etc.) populate.
+            ansible_facts = _ensure_ansible_prefix(raw_facts)
             fqdn = _resolve_fqdn(ansible_facts, host.get_name())
             if fqdn in seen_fqdns:
                 continue

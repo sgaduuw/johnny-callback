@@ -21,6 +21,7 @@ from plugins.callback.callback import (
     STDOUT_MAX,
     CallbackModule,
     _delta_to_ms,
+    _ensure_ansible_prefix,
     _iso_utc,
     _resolve_fqdn,
     _truncate,
@@ -69,6 +70,47 @@ class TestUuid7:
         first = uuid7()
         second = uuid7()
         assert first.bytes[:6] <= second.bytes[:6]
+
+
+class TestEnsureAnsiblePrefix:
+    def test_re_adds_prefix_to_unprefixed_keys(self) -> None:
+        out = _ensure_ansible_prefix({
+            "fqdn": "web1.example.com",
+            "default_ipv4": {"address": "10.0.0.1"},
+            "memtotal_mb": 4096,
+        })
+        assert out == {
+            "ansible_fqdn": "web1.example.com",
+            "ansible_default_ipv4": {"address": "10.0.0.1"},
+            "ansible_memtotal_mb": 4096,
+        }
+
+    def test_keeps_already_prefixed_keys(self) -> None:
+        out = _ensure_ansible_prefix({
+            "ansible_fqdn": "web1.example.com",
+            "ansible_uptime_seconds": 3600,
+        })
+        assert out == {
+            "ansible_fqdn": "web1.example.com",
+            "ansible_uptime_seconds": 3600,
+        }
+
+    def test_handles_mixed_keys(self) -> None:
+        # In practice host_vars["ansible_facts"] is uniformly
+        # unprefixed, but be lenient if a future ansible release
+        # changes the convention or a custom fact-cache plugin
+        # produces mixed shapes.
+        out = _ensure_ansible_prefix({
+            "fqdn": "x",
+            "ansible_distribution": "Debian",
+        })
+        assert out == {
+            "ansible_fqdn": "x",
+            "ansible_distribution": "Debian",
+        }
+
+    def test_empty_input(self) -> None:
+        assert _ensure_ansible_prefix({}) == {}
 
 
 class TestResolveFqdn:
@@ -715,6 +757,42 @@ class TestSnapshotPlayFacts:
         m._snapshot_play_facts(play)
         assert len(m._facts) == 1
         assert m._facts[0]["ansible_facts"] == {"existing": True}
+
+    def test_normalises_unprefixed_keys_from_variable_manager(self) -> None:
+        # Regression: ansible's variable_manager strips the ansible_
+        # prefix when storing facts under host_vars["ansible_facts"]
+        # (e.g. fqdn, hostname, default_ipv4 — no prefix), regardless
+        # of inject_facts_as_vars. Pre-fix, _resolve_fqdn looked for
+        # "ansible_fqdn" and missed it, falling back to inventory
+        # hostname; the resulting snapshot had a short-name fqdn AND
+        # unprefixed last_facts (so johnny's projection columns came
+        # back NULL). The plugin now re-adds the prefix before
+        # resolving and before pushing to self._facts.
+        m = _make_module()
+        m.playbook_id = uuid7()
+        play = self._make_play_with_hosts({
+            "web1": {"ansible_facts": {
+                "fqdn": "web1.example.com",
+                "default_ipv4": {"address": "10.0.0.1"},
+                "memtotal_mb": 4096,
+            }},
+        })
+        m._snapshot_play_facts(play)
+        assert len(m._facts) == 1
+        rec = m._facts[0]
+        # Must resolve to the canonical FQDN, not "web1".
+        assert rec["fqdn"] == "web1.example.com"
+        # last_facts must carry prefixed keys so johnny's
+        # generated columns (json_extract on ansible_default_ipv4
+        # etc.) populate.
+        assert rec["ansible_facts"]["ansible_fqdn"] == "web1.example.com"
+        assert rec["ansible_facts"]["ansible_default_ipv4"] == {
+            "address": "10.0.0.1"
+        }
+        assert rec["ansible_facts"]["ansible_memtotal_mb"] == 4096
+        # Must not leave the unprefixed copies hanging around.
+        assert "fqdn" not in rec["ansible_facts"]
+        assert "default_ipv4" not in rec["ansible_facts"]
 
     def test_swallows_variable_manager_errors(self) -> None:
         m = _make_module()
