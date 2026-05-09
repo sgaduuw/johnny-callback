@@ -6,6 +6,13 @@
 # comma-separated list (it can co-exist with other notification plugins).
 callbacks_enabled = sgaduuw.johnny.callback
 
+# IMPORTANT: callback plugins enabled in ansible.cfg are NOT loaded
+# by /usr/bin/ansible (ad-hoc commands like `ansible -m setup`)
+# unless this is set to True. /usr/bin/ansible-playbook always loads
+# callbacks regardless of this setting. If ad-hoc runs appear silent
+# in johnny while playbook runs work, this is the gate to flip.
+bin_ansible_callbacks = True
+
 [callback_johnny]
 # api_url: base URL only. Do NOT include /api/. The plugin appends
 # /api/v1/... itself. Trailing slash is stripped, but a path prefix
