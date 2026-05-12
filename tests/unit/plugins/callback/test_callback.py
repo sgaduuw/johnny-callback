@@ -474,22 +474,27 @@ class TestPlaybookLifecyclePayloads:
     def test_post_facts_body(self, captured_posts) -> None:
         m = _make_module()
         m.playbook_id = uuid7()
-        m._facts = [{
+        # Drop-before-send: _post_facts clears the buffer once it
+        # captures the body, so compare the captured POST against a
+        # snapshot taken before the call — not against m._facts after.
+        records = [{
             "fqdn": "h.example.com",
             "inventory_hostname": "h",
             "groups": ["webservers"],
             "ansible_facts": {"ansible_uptime_seconds": 1},
         }]
+        m._facts = list(records)
         m._post_facts()
         body = captured_posts[0]["body"]
         assert "captured_at" in body
-        assert body["hosts"] == m._facts
+        assert body["hosts"] == records
+        assert m._facts == []  # cleared after send
         assert captured_posts[0]["url"].endswith(f"/api/v1/playbooks/{m.playbook_id}/facts")
 
     def test_post_events_body(self, captured_posts) -> None:
         m = _make_module()
         m.playbook_id = uuid7()
-        m._events = [{
+        events = [{
             "event_uuid": str(uuid7()),
             "fqdn": "h.example.com",
             "task_name": "install",
@@ -501,9 +506,11 @@ class TestPlaybookLifecyclePayloads:
             "stdout_truncated": False,
             "diff": None,
         }]
+        m._events = list(events)
         m._post_events()
         body = captured_posts[0]["body"]
-        assert body == {"events": m._events}
+        assert body == {"events": events}
+        assert m._events == []
         assert captured_posts[0]["url"].endswith(f"/api/v1/playbooks/{m.playbook_id}/events")
 
     def test_post_finish_body_shape(self, captured_posts) -> None:
@@ -853,3 +860,119 @@ class TestIsSetupTask:
 
     def test_rejects_other_actions(self) -> None:
         assert not CallbackModule._is_setup_task(_fake_task(action="apt"))
+
+
+class TestChunkedFlush:
+    """`facts_chunk_size` and `events_chunk_size` let the plugin
+    flush partial batches mid-play instead of holding everything
+    until v2_playbook_on_stats. 0 disables (the pre-0.2 default
+    behaviour); a positive value triggers a /facts or /events POST
+    every N appends and clears the in-memory buffer.
+
+    Both knobs match the existing api_url/api_token configuration
+    pattern: env var first, ini fallback. Tests exercise the post
+    threshold directly; option-parsing wiring is covered by the
+    DOCUMENTATION schema test elsewhere in this file."""
+
+    def _facts_result(self, fqdn: str) -> MagicMock:
+        return _fake_result(
+            host=_fake_host(fqdn, ["webservers"]),
+            task=_fake_task(action="setup"),
+            rdata={"ansible_facts": {"ansible_fqdn": fqdn}},
+        )
+
+    def _event_result(self, fqdn: str) -> MagicMock:
+        return _fake_result(
+            host=_fake_host(fqdn),
+            task=_fake_task(action="apt", name="install nginx"),
+            rdata={"changed": False, "delta": "0:00:00.100000"},
+        )
+
+    def test_facts_chunk_zero_disables_mid_play_flush(
+        self, captured_posts
+    ) -> None:
+        m = _make_module()
+        m.facts_chunk = 0
+        m.playbook_id = uuid7()
+        for i in range(10):
+            m._record_facts(self._facts_result(f"h{i}.example.com"))
+        # Nothing posted yet — buffer held in memory.
+        assert captured_posts == []
+        assert len(m._facts) == 10
+
+    def test_facts_chunk_flushes_at_threshold(self, captured_posts) -> None:
+        m = _make_module()
+        m.facts_chunk = 5
+        m.playbook_id = uuid7()
+        for i in range(7):
+            m._record_facts(self._facts_result(f"h{i}.example.com"))
+        # First 5 triggered one /facts POST + buffer reset; remaining
+        # 2 sit in the buffer waiting for v2_playbook_on_stats.
+        assert len(captured_posts) == 1
+        assert captured_posts[0]["url"].endswith(f"/{m.playbook_id}/facts")
+        assert len(captured_posts[0]["body"]["hosts"]) == 5
+        assert len(m._facts) == 2
+
+    def test_facts_remainder_flushes_at_stats(self, captured_posts) -> None:
+        m = _make_module()
+        m.facts_chunk = 5
+        m.events_chunk = 0
+        m.playbook_id = uuid7()
+        for i in range(7):
+            m._record_facts(self._facts_result(f"h{i}.example.com"))
+        # Simulate v2_playbook_on_stats by manually invoking the
+        # tail-flush half of that hook. Stats POST is mocked away to
+        # keep this test focused on the buffer drain.
+        stats = MagicMock()
+        stats.processed.keys.return_value = []
+        m.v2_playbook_on_stats(stats)
+        # First chunk (5 hosts), tail (2 hosts), then /finish — three
+        # POSTs total, the last being /finish.
+        urls = [p["url"] for p in captured_posts]
+        assert sum(u.endswith("/facts") for u in urls) == 2
+        # Tail-flush carried the remainder (2 hosts).
+        facts_posts = [p for p in captured_posts if p["url"].endswith("/facts")]
+        assert len(facts_posts[-1]["body"]["hosts"]) == 2
+
+    def test_events_chunk_flushes_at_threshold(self, captured_posts) -> None:
+        m = _make_module()
+        m.events_chunk = 3
+        m.playbook_id = uuid7()
+        for i in range(8):
+            m._record_event(
+                self._event_result(f"h{i}.example.com"),
+                base_status="ok",
+            )
+        # 3+3 triggered two /events POSTs; 2 remaining in buffer.
+        events_posts = [p for p in captured_posts if p["url"].endswith("/events")]
+        assert len(events_posts) == 2
+        assert all(len(p["body"]["events"]) == 3 for p in events_posts)
+        assert len(m._events) == 2
+
+    def test_play_start_posts_before_snapshot_flush(self, captured_posts) -> None:
+        # Smart-cache scenario: snapshot loads many hosts at once. With
+        # chunking on, those snapshots can trigger a /facts POST. The
+        # plugin must POST /playbooks first so the chunked /facts isn't
+        # rejected as referencing an unknown playbook_id.
+        m = _make_module()
+        m.facts_chunk = 5
+        m.user = "ansible"
+        m.playbook_started_at = datetime(2026, 5, 8, tzinfo=timezone.utc)
+        play = MagicMock()
+        play.hosts = "all"
+        vm = MagicMock()
+        inv = MagicMock()
+        inv._sources = ["inventory.yml"]
+        hosts = [
+            _fake_host(f"h{i}.example.com", ["webservers"]) for i in range(7)
+        ]
+        inv.get_hosts.return_value = hosts
+        vm._inventory = inv
+        vm.get_vars.return_value = {
+            "ansible_facts": {"fqdn": "doesnt-matter.example.com"}
+        }
+        play.get_variable_manager.return_value = vm
+        m.v2_playbook_on_play_start(play)
+        # First POST must be /playbooks. Whatever /facts chunks fire
+        # during _snapshot_play_facts come after.
+        assert captured_posts[0]["url"].endswith("/api/v1/playbooks")
