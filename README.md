@@ -74,11 +74,32 @@ export JOHNNY_API_TOKEN=<bearer-token-matching-johnny-api>
 The bearer token should *always* come from environment / secrets
 manager, never `ansible.cfg`.
 
-| Option            | Env var               | ini key            | Required        |
-|-------------------|-----------------------|--------------------|-----------------|
-| `api_url`         | `JOHNNY_API_URL`      | `api_url`          | yes             |
-| `api_token`       | `JOHNNY_API_TOKEN`    | `api_token`        | yes             |
-| `timeout_seconds` | `JOHNNY_API_TIMEOUT`  | `timeout_seconds`  | no (default 30) |
+| Option              | Env var                  | ini key              | Required         |
+|---------------------|--------------------------|----------------------|------------------|
+| `api_url`           | `JOHNNY_API_URL`         | `api_url`            | yes              |
+| `api_token`         | `JOHNNY_API_TOKEN`       | `api_token`          | yes              |
+| `timeout_seconds`   | `JOHNNY_API_TIMEOUT`     | `timeout_seconds`    | no (default 30)  |
+| `facts_chunk_size`  | `JOHNNY_API_FACTS_CHUNK` | `facts_chunk_size`   | no (default 25)  |
+| `events_chunk_size` | `JOHNNY_API_EVENTS_CHUNK`| `events_chunk_size`  | no (default 500) |
+
+### Chunked flush (large fleets)
+
+By default the plugin flushes facts in batches of **25 hosts** and
+events in batches of **500** while the play runs, instead of holding
+everything in memory until `v2_playbook_on_stats`. This bounds plugin
+memory on the controller and lets hosts appear in johnny mid-play.
+
+Tuning:
+
+- `JOHNNY_API_FACTS_CHUNK=0` / `JOHNNY_API_EVENTS_CHUNK=0` disables
+  chunking and reverts to the pre-0.2 single-flush-at-end behaviour.
+- Each chunk POST is synchronous and best-effort — a failed chunk is
+  logged via `display.warning()` and dropped, matching the existing
+  log-and-swallow contract. Set `JOHNNY_API_TIMEOUT` lower (e.g. 10s)
+  in chunked mode so a dead api fails fast per chunk rather than
+  stretching the play with N × 30s timeouts.
+- For small fleets (< ~100 hosts) the chunking is irrelevant; the
+  defaults emit one or two POSTs per endpoint regardless.
 
 ## Compatibility
 
