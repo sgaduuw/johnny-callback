@@ -67,6 +67,38 @@ DOCUMENTATION = """
       ini:
         - section: callback_johnny
           key: timeout_seconds
+    facts_chunk_size:
+      description: >
+        Flush a partial /api/v1/playbooks/{id}/facts batch whenever
+        this many host fact snapshots have accumulated, instead of
+        holding everything until v2_playbook_on_stats. Bounds plugin
+        memory on the controller and lets the operator see hosts
+        appear in johnny mid-play. Set to 0 to disable chunking and
+        only flush once at end-of-play (the pre-0.2 behaviour).
+        Per-chunk POSTs are synchronous and best-effort; a failed
+        chunk is dropped, not retried, matching the existing
+        log-and-swallow contract.
+      type: int
+      default: 25
+      env:
+        - name: JOHNNY_API_FACTS_CHUNK
+      ini:
+        - section: callback_johnny
+          key: facts_chunk_size
+    events_chunk_size:
+      description: >
+        Flush a partial /api/v1/playbooks/{id}/events batch whenever
+        this many task events have accumulated. Set to 0 to disable
+        chunking and only flush once at end-of-play. Larger default
+        than facts because events are smaller per-row but more
+        numerous (one per task per host).
+      type: int
+      default: 500
+      env:
+        - name: JOHNNY_API_EVENTS_CHUNK
+      ini:
+        - section: callback_johnny
+          key: events_chunk_size
 """
 
 STDOUT_MAX = 4096
@@ -185,6 +217,10 @@ class CallbackModule(CallbackBase):
         self._facts: list[dict[str, Any]] = []
         self._events: list[dict[str, Any]] = []
         self._started_posted = False
+        # Set in set_options; zeroed here so test factories that bypass
+        # set_options still find numeric defaults.
+        self.facts_chunk: int = 0
+        self.events_chunk: int = 0
 
     def set_options(self, task_keys=None, var_options=None, direct=None) -> None:
         super().set_options(
@@ -193,6 +229,8 @@ class CallbackModule(CallbackBase):
         self.api_url: str = (self.get_option("api_url") or "").rstrip("/")
         self.api_token: str = self.get_option("api_token") or ""
         self.timeout: int = int(self.get_option("timeout_seconds") or 30)
+        self.facts_chunk = max(0, int(self.get_option("facts_chunk_size") or 0))
+        self.events_chunk = max(0, int(self.get_option("events_chunk_size") or 0))
 
     # -------- ansible callback hooks --------
 
@@ -221,8 +259,12 @@ class CallbackModule(CallbackBase):
                     self.inventory_sources = [str(s) for s in sources]
             except Exception:  # noqa: BLE001 - defensive; never raise
                 pass
-        self._snapshot_play_facts(play)
+        # POST /playbooks BEFORE snapshotting facts. With chunked-flush
+        # enabled (facts_chunk > 0), _snapshot_play_facts may trigger a
+        # /facts POST partway through its loop; without the playbook row
+        # already on the server, that POST would 404.
         self._post_start()
+        self._snapshot_play_facts(play)
 
     def _ensure_playbook_state(self, play=None) -> None:
         """Initialise playbook-level state if not yet done.
@@ -320,6 +362,7 @@ class CallbackModule(CallbackBase):
                 "ansible_facts": dict(ansible_facts),
             })
             seen_fqdns.add(fqdn)
+            self._maybe_flush_facts()
 
     def v2_runner_on_ok(self, result) -> None:
         self._record_event(result, base_status="ok")
@@ -389,6 +432,7 @@ class CallbackModule(CallbackBase):
             # under extra="forbid"). See johnny-callback#7.
             "diff_truncated": diff_was_truncated,
         })
+        self._maybe_flush_events()
 
     def _record_facts(self, result) -> None:
         host = result._host
@@ -405,6 +449,19 @@ class CallbackModule(CallbackBase):
             "groups": groups,
             "ansible_facts": dict(ansible_facts),
         })
+        self._maybe_flush_facts()
+
+    # -------- chunked-flush gates --------
+
+    def _maybe_flush_facts(self) -> None:
+        # Chunking is opt-in via facts_chunk_size; 0 keeps the
+        # pre-0.2 behaviour of one flush at v2_playbook_on_stats.
+        if self.facts_chunk and len(self._facts) >= self.facts_chunk:
+            self._post_facts()
+
+    def _maybe_flush_events(self) -> None:
+        if self.events_chunk and len(self._events) >= self.events_chunk:
+            self._post_events()
 
     # -------- HTTP --------
 
@@ -426,14 +483,25 @@ class CallbackModule(CallbackBase):
         self._post("/api/v1/playbooks", body)
 
     def _post_facts(self) -> None:
+        # Drop-before-send: clear the buffer before issuing the POST so
+        # a failed chunk can't get re-shipped (and thus duplicated as a
+        # second host_facts_history row) as part of the next chunk.
+        # Matches the existing log-and-swallow contract — failed batches
+        # are missed batches, not stuck-in-buffer ones.
+        if not self._facts:
+            return
         body = {
             "captured_at": _iso_utc(datetime.now(timezone.utc)),
             "hosts": self._facts,
         }
+        self._facts = []
         self._post(f"/api/v1/playbooks/{self.playbook_id}/facts", body)
 
     def _post_events(self) -> None:
+        if not self._events:
+            return
         body = {"events": self._events}
+        self._events = []
         self._post(f"/api/v1/playbooks/{self.playbook_id}/events", body)
 
     def _post_finish(self, stats) -> None:
