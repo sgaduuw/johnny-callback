@@ -225,3 +225,10 @@ MEMORY.md
 
 # Built collection tarball (created by `ansible-galaxy collection build`)
 *.tar.gz
+
+# Claude tooling: gitignored _claude/ directory holds the
+# CLAUDE.md / CONTEXT.md / MEMORY.md trio plus AI-workflow state
+# (specs, plans, brainstorm sessions). The root CLAUDE.md is a
+# one-line stub pointing into _claude/. See ~/Projects/_claude/
+# CONTEXT.md "Why _claude/ and not the trio at root" for context.
+/_claude/
