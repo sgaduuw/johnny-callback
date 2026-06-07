@@ -18,7 +18,7 @@ jobs:
       # the field. The plugin's source code stays
       # Python-3.10-compatible so a Ubuntu 22.04 + ansible-core
       # 2.16/2.17 controller can still install and run the
-      # shipped collection, those users just aren't in the
+      # shipped collection; those users just aren't in the
       # matrix any more. fail-fast: false so a single-version
       # regression doesn't mask its diagnosis behind a sibling
       # job's abort.
