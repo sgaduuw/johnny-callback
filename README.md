@@ -39,7 +39,7 @@ From [galaxy.ansible.com](https://galaxy.ansible.com/ui/repo/published/sgaduuw/j
 ansible-galaxy collection install sgaduuw.johnny
 
 # Pinned to a specific version
-ansible-galaxy collection install sgaduuw.johnny:0.1.0
+ansible-galaxy collection install sgaduuw.johnny:0.2.1
 ```
 
 From git, for an unreleased `main`:
