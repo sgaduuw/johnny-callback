@@ -24,7 +24,7 @@ dev = [
     "ruff>=0.15,<0.16",
     # Bumping past 2.18 raises the controller Python floor to 3.11
     # (was 3.10 on 2.16/2.17). Ubuntu 22.04 + ansible-core 2.16/2.17
-    # users are still source-compat at runtime — they just stop being
+    # users are still source-compat at runtime, but stop being
     # covered by our CI matrix.
     "ansible-core>=2.19,<3.0",
     # Used by TestDocumentationYaml to parse the plugin's DOCUMENTATION
