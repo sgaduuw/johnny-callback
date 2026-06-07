@@ -1,6 +1,6 @@
 namespace: sgaduuw
 name: johnny
-version: 0.2.0
+version: 0.2.1
 readme: README.md
 authors:
   - sgaduuw
@@ -17,7 +17,20 @@ repository: https://github.com/sgaduuw/johnny-callback
 issues: https://github.com/sgaduuw/johnny-callback/issues
 build_ignore:
   - .github
+  - .gitignore
   - tests
   - pyproject.toml
-  - poetry.lock
+  - uv.lock
   - "*.tar.gz"
+  # uv defaults the venv to ./.venv (poetry kept it at
+  # ~/.cache/pypoetry/virtualenvs); without this exclude the
+  # collection tarball balloons by ~100 MB.
+  - .venv
+  # Local AI-workflow artefacts (trio + plans + brainstorm) and
+  # the root-stub CLAUDE.md that imports them.
+  - _claude
+  - CLAUDE.md
+  # Test / lint artefacts.
+  - .coverage
+  - .pytest_cache
+  - .ruff_cache
