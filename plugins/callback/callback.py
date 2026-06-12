@@ -364,6 +364,25 @@ class CallbackModule(CallbackBase):
             seen_fqdns.add(fqdn)
             self._maybe_flush_facts()
 
+    def _collect_topology(self, inv) -> dict[str, list[str]]:
+        """parent group name -> sorted direct child group names.
+
+        Walks inv.groups, the authoritative group->child-group source.
+        NOT inventory_manager.get_groups_dict(), which returns
+        group->hostnames (membership), not hierarchy. Every group is
+        emitted, childless ones included with an empty list: the empty
+        list is what lets the server prune the last nesting under a
+        parent this inventory has dropped. 'all' is retained (it
+        anchors the ancestry chain server-side); 'ungrouped' appears
+        both as a childless key and as a child of 'all', consistent
+        with the membership path, which already records ungrouped
+        hosts under that group.
+        """
+        return {
+            name: sorted(c.name for c in group.child_groups)
+            for name, group in inv.groups.items()
+        }
+
     def v2_runner_on_ok(self, result) -> None:
         self._record_event(result, base_status="ok")
         if self._is_setup_task(result._task):
