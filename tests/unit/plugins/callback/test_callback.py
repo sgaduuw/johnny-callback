@@ -12,6 +12,7 @@ import json
 import socket
 import ssl
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
@@ -976,3 +977,115 @@ class TestChunkedFlush:
         # First POST must be /playbooks. Whatever /facts chunks fire
         # during _snapshot_play_facts come after.
         assert captured_posts[0]["url"].endswith("/api/v1/playbooks")
+
+
+# ---------------------------------------------------------- topology
+
+
+def _fake_inventory(topology: dict[str, list[str]]) -> MagicMock:
+    """Fake InventoryManager exposing .groups name -> group objects.
+
+    Child entries use SimpleNamespace: MagicMock(name=...) sets the
+    mock's display name, NOT a .name attribute, so it cannot fake an
+    ansible Group here.
+    """
+    inv = MagicMock()
+    inv.groups = {
+        name: SimpleNamespace(
+            child_groups=[SimpleNamespace(name=c) for c in children]
+        )
+        for name, children in topology.items()
+    }
+    return inv
+
+
+class TestCollectTopology:
+    def test_emits_every_group_childless_with_empty_list(self) -> None:
+        """Childless groups MUST appear with []: the empty list is what
+        lets the server prune the last nesting under a parent. Child
+        lists come out sorted for payload determinism."""
+        m = _make_module()
+        inv = _fake_inventory(
+            {
+                "all": ["ungrouped", "linux"],
+                "linux": ["debian"],
+                "debian": [],
+                "ungrouped": [],
+            }
+        )
+        assert m._collect_topology(inv) == {
+            "all": ["linux", "ungrouped"],
+            "linux": ["debian"],
+            "debian": [],
+            "ungrouped": [],
+        }
+
+
+class TestTopologyEmit:
+    def test_play_start_includes_topology_in_start_post(
+        self, captured_posts
+    ) -> None:
+        m = _make_module()
+        play = MagicMock()
+        vm = MagicMock()
+        vm._inventory = _fake_inventory({"linux": ["debian"], "debian": []})
+        vm._inventory._sources = ["inventory.yml"]
+        play.get_variable_manager.return_value = vm
+        m.v2_playbook_on_play_start(play)
+        starts = [
+            p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")
+        ]
+        assert len(starts) == 1
+        assert starts[0]["body"]["groups_topology"] == {
+            "linux": ["debian"],
+            "debian": [],
+        }
+
+    def test_unavailable_inventory_emits_empty_topology(
+        self, captured_posts
+    ) -> None:
+        """Ad-hoc / degraded paths must still POST, with {} (the wire
+        default), never raise. A bare MagicMock vm has a MagicMock
+        .groups whose .items() is not iterable as pairs, exercising
+        the defensive wrapper."""
+        m = _make_module()
+        play = MagicMock()
+        play.get_variable_manager.return_value = MagicMock()
+        m.v2_playbook_on_play_start(play)
+        starts = [
+            p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")
+        ]
+        assert len(starts) == 1
+        assert starts[0]["body"]["groups_topology"] == {}
+
+    def test_topology_collected_once_first_play_wins(
+        self, captured_posts
+    ) -> None:
+        """Topology is inventory-scoped and captured on the first play;
+        a later play with a different inventory must not overwrite it,
+        matching the first-play-wins semantics of inventory_sources."""
+        m = _make_module()
+
+        play1 = MagicMock()
+        vm1 = MagicMock()
+        vm1._inventory = _fake_inventory({"linux": ["debian"], "debian": []})
+        vm1._inventory._sources = ["inventory.yml"]
+        play1.get_variable_manager.return_value = vm1
+        m.v2_playbook_on_play_start(play1)
+
+        play2 = MagicMock()
+        vm2 = MagicMock()
+        vm2._inventory = _fake_inventory({"redhat": ["centos"], "centos": []})
+        vm2._inventory._sources = ["other.yml"]
+        play2.get_variable_manager.return_value = vm2
+        m.v2_playbook_on_play_start(play2)
+
+        assert m._topology == {"linux": ["debian"], "debian": []}
+        starts = [
+            p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")
+        ]
+        assert len(starts) == 1
+        assert starts[0]["body"]["groups_topology"] == {
+            "linux": ["debian"],
+            "debian": [],
+        }

@@ -9,9 +9,9 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Reads pyproject.toml + poetry.lock for the dev dep group.
+  # Reads pyproject.toml + uv.lock for the dev dep group (uv ecosystem updates both).
   # The collection itself has zero runtime deps (stdlib only).
-  - package-ecosystem: "pip"
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"

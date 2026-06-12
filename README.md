@@ -22,6 +22,12 @@ sends four POSTs to johnny-api:
 | `POST /api/v1/playbooks/{id}/events`  | After all plays end, per-task results    |
 | `POST /api/v1/playbooks/{id}/finish`  | Last, with the per-host stats summary    |
 
+The start body (`POST /api/v1/playbooks`) includes
+`groups_topology`: a map of parent group name to its sorted direct
+child group names, derived from the inventory at play start.
+Requires **johnny server >= 0.5.0** to receive it (older servers
+use `extra="forbid"` and will reject the field).
+
 Best-effort: if johnny-api is down or unreachable, the plugin logs
 a warning and the play continues. johnny's idempotent ingest
 (plugin-generated UUIDv7 IDs + `INSERT OR IGNORE` on `event_uuid`)
@@ -39,7 +45,7 @@ From [galaxy.ansible.com](https://galaxy.ansible.com/ui/repo/published/sgaduuw/j
 ansible-galaxy collection install sgaduuw.johnny
 
 # Pinned to a specific version
-ansible-galaxy collection install sgaduuw.johnny:0.2.1
+ansible-galaxy collection install sgaduuw.johnny:0.3.0
 ```
 
 From git, for an unreleased `main`:
@@ -105,6 +111,7 @@ Tuning:
 
 - ansible-core >= 2.16
 - Python >= 3.10 (controller-side; plugin polyfills UUIDv7 until 3.14)
+- johnny server >= 0.5.0 (required to accept the `groups_topology` field)
 
 ## License
 
