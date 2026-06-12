@@ -1057,3 +1057,35 @@ class TestTopologyEmit:
         ]
         assert len(starts) == 1
         assert starts[0]["body"]["groups_topology"] == {}
+
+    def test_topology_collected_once_first_play_wins(
+        self, captured_posts
+    ) -> None:
+        """Topology is inventory-scoped and captured on the first play;
+        a later play with a different inventory must not overwrite it,
+        matching the first-play-wins semantics of inventory_sources."""
+        m = _make_module()
+
+        play1 = MagicMock()
+        vm1 = MagicMock()
+        vm1._inventory = _fake_inventory({"linux": ["debian"], "debian": []})
+        vm1._inventory._sources = ["inventory.yml"]
+        play1.get_variable_manager.return_value = vm1
+        m.v2_playbook_on_play_start(play1)
+
+        play2 = MagicMock()
+        vm2 = MagicMock()
+        vm2._inventory = _fake_inventory({"redhat": ["centos"], "centos": []})
+        vm2._inventory._sources = ["other.yml"]
+        play2.get_variable_manager.return_value = vm2
+        m.v2_playbook_on_play_start(play2)
+
+        assert m._topology == {"linux": ["debian"], "debian": []}
+        starts = [
+            p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")
+        ]
+        assert len(starts) == 1
+        assert starts[0]["body"]["groups_topology"] == {
+            "linux": ["debian"],
+            "debian": [],
+        }
