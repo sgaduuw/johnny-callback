@@ -1019,3 +1019,41 @@ class TestCollectTopology:
             "debian": [],
             "ungrouped": [],
         }
+
+
+class TestTopologyEmit:
+    def test_play_start_includes_topology_in_start_post(
+        self, captured_posts
+    ) -> None:
+        m = _make_module()
+        play = MagicMock()
+        vm = MagicMock()
+        vm._inventory = _fake_inventory({"linux": ["debian"], "debian": []})
+        vm._inventory._sources = ["inventory.yml"]
+        play.get_variable_manager.return_value = vm
+        m.v2_playbook_on_play_start(play)
+        starts = [
+            p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")
+        ]
+        assert len(starts) == 1
+        assert starts[0]["body"]["groups_topology"] == {
+            "linux": ["debian"],
+            "debian": [],
+        }
+
+    def test_unavailable_inventory_emits_empty_topology(
+        self, captured_posts
+    ) -> None:
+        """Ad-hoc / degraded paths must still POST, with {} (the wire
+        default), never raise. A bare MagicMock vm has a MagicMock
+        .groups whose .items() is not iterable as pairs, exercising
+        the defensive wrapper."""
+        m = _make_module()
+        play = MagicMock()
+        play.get_variable_manager.return_value = MagicMock()
+        m.v2_playbook_on_play_start(play)
+        starts = [
+            p for p in captured_posts if p["url"].endswith("/api/v1/playbooks")
+        ]
+        assert len(starts) == 1
+        assert starts[0]["body"]["groups_topology"] == {}

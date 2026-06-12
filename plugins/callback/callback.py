@@ -217,6 +217,7 @@ class CallbackModule(CallbackBase):
         self._facts: list[dict[str, Any]] = []
         self._events: list[dict[str, Any]] = []
         self._started_posted = False
+        self._topology: dict[str, list[str]] = {}
         # Set in set_options; zeroed here so test factories that bypass
         # set_options still find numeric defaults.
         self.facts_chunk: int = 0
@@ -257,6 +258,17 @@ class CallbackModule(CallbackBase):
                 sources = getattr(inv, "_sources", None) if inv else None
                 if sources:
                     self.inventory_sources = [str(s) for s in sources]
+            except Exception:  # noqa: BLE001 - defensive; never raise
+                pass
+        # Topology is inventory-scoped and stable across plays; first
+        # play wins, same as inventory_sources above. Must run before
+        # _post_start so the start POST carries it.
+        if not self._topology:
+            try:
+                vm = play.get_variable_manager()
+                inv = getattr(vm, "_inventory", None)
+                if inv is not None:
+                    self._topology = self._collect_topology(inv)
             except Exception:  # noqa: BLE001 - defensive; never raise
                 pass
         # POST /playbooks BEFORE snapshotting facts. With chunked-flush
@@ -498,6 +510,7 @@ class CallbackModule(CallbackBase):
             "tags": self.tags,
             "skip_tags": self.skip_tags,
             "check_mode": self.check_mode,
+            "groups_topology": self._topology,
         }
         self._post("/api/v1/playbooks", body)
 
