@@ -1,8 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [develop, main, "release/*", "hotfix/*"]
+  # CI is the pull-request gate: the test matrix (ruff + pytest-cov +
+  # collection-build smoke) on every PR. It runs on NO branch push.
+  # The Galaxy publish lives in publish.yml, triggered on the GitHub
+  # Release (release: published), which trusts this PR gate and runs
+  # no tests. (develop is a loose integration branch; main is the
+  # PR-gated release branch.)
   pull_request:
     branches: [develop, main, "release/*", "hotfix/*"]
 
