@@ -19,14 +19,14 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "pytest>=9,<10",
+    "pytest>=9.1.1,<10",
     "pytest-cov>=7,<8",
-    "ruff>=0.15,<0.16",
+    "ruff>=0.15.18,<0.16",
     # Bumping past 2.18 raises the controller Python floor to 3.11
     # (was 3.10 on 2.16/2.17). Ubuntu 22.04 + ansible-core 2.16/2.17
     # users are still source-compat at runtime, but stop being
     # covered by our CI matrix.
-    "ansible-core>=2.19,<3.0",
+    "ansible-core>=2.19.11,<3.0",
     # Used by TestDocumentationYaml to parse the plugin's DOCUMENTATION
     # block. ansible-core pulls it transitively, but pin explicitly so
     # the test doesn't break if that ever changes.
